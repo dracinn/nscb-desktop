@@ -14,8 +14,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 fn nscb_binary_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "nscb_rust.exe"
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "nscb_rust-macos-arm64"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "nscb_rust-macos-amd64"
     } else {
         "nscb_rust-linux-amd64"
     }
@@ -413,7 +415,13 @@ fn save_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(),
 
 #[tauri::command]
 fn get_platform() -> String {
-    std::env::consts::OS.to_string()
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "macos-arm64".to_string()
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "macos-amd64".to_string()
+    } else {
+        std::env::consts::OS.to_string()
+    }
 }
 
 pub fn run() {
