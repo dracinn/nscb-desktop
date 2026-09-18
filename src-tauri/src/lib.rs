@@ -1,8 +1,10 @@
 use serde::Serialize;
 use std::collections::HashMap;
+#[cfg(not(target_os = "android"))]
 use std::io::{BufRead, BufReader, Read};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+#[cfg(not(target_os = "android"))]
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tauri::Manager;
@@ -12,7 +14,9 @@ use tauri::Emitter;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 fn nscb_binary_name() -> &'static str {
-    if cfg!(target_os = "windows") {
+    if cfg!(target_os = "android") {
+        "embedded-nscb"
+    } else if cfg!(target_os = "windows") {
         "nscb_rust.exe"
     } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "nscb_rust-macos-arm64"
@@ -111,8 +115,16 @@ fn has_keys(app: tauri::AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 fn has_backend(app: tauri::AppHandle) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return Ok(true);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     let tools_dir = app_tools_dir(&app)?;
     Ok(tools_dir.join(nscb_binary_name()).exists())
+    }
 }
 
 #[tauri::command]
@@ -144,6 +156,7 @@ fn import_nscb_binary(app: tauri::AppHandle, src_path: String) -> Result<(), Str
 }
 
 #[tauri::command]
+#[cfg(not(target_os = "android"))]
 fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Result<(), String> {
     {
         let mut lock = running_pid()
@@ -252,6 +265,65 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
 }
 
 #[tauri::command]
+#[cfg(target_os = "android")]
+fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Result<(), String> {
+    use clap::Parser;
+
+    {
+        let mut lock = running_pid()
+            .lock()
+            .map_err(|_| "Failed to lock runner state".to_string())?;
+        if lock.is_some() {
+            return Err("An operation is already running".to_string());
+        }
+        *lock = Some(0);
+    }
+
+    std::thread::spawn(move || {
+        let _ = app.emit(
+            "nscb-stdout",
+            StdoutEvent {
+                op: operation.clone(),
+                line: "[START] Running embedded Android backend".to_string(),
+            },
+        );
+
+        let mut argv = vec!["nscb".to_string()];
+        argv.extend(args);
+        let result = nscb::cli::Args::try_parse_from(argv)
+            .map_err(|error| error.to_string())
+            .and_then(|parsed| nscb::cli::dispatch(parsed).map_err(|error| error.to_string()));
+
+        let code = if let Err(message) = result {
+            let _ = app.emit(
+                "nscb-stderr",
+                StderrEvent {
+                    op: operation.clone(),
+                    chunk: message,
+                },
+            );
+            1
+        } else {
+            let _ = app.emit(
+                "nscb-stdout",
+                StdoutEvent {
+                    op: operation.clone(),
+                    line: "[DONE] Android operation completed".to_string(),
+                },
+            );
+            0
+        };
+
+        if let Ok(mut lock) = running_pid().lock() {
+            *lock = None;
+        }
+        let _ = app.emit("nscb-done", DoneEvent { op: operation, code });
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 fn get_backend_version(app: tauri::AppHandle) -> Result<String, String> {
     let settings = read_settings(&app)?;
     if let Some(v) = settings.get("backendVersion") {
@@ -282,6 +354,13 @@ fn save_backend_version(app: tauri::AppHandle, version: String) -> Result<(), St
 
 #[tauri::command]
 fn download_backend(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, url);
+        return Ok(());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     let tools_dir = app_tools_dir(&app)?;
     let dst = tools_dir.join(nscb_binary_name());
 
@@ -303,6 +382,7 @@ fn download_backend(app: tauri::AppHandle, url: String) -> Result<(), String> {
     }
 
     Ok(())
+    }
 }
 
 #[tauri::command]
@@ -344,6 +424,11 @@ fn cancel_nscb() -> Result<(), String> {
     };
 
     if let Some(pid) = pid_opt {
+        #[cfg(target_os = "android")]
+        {
+            let _ = pid;
+            return Err("The embedded Android backend cannot be interrupted safely yet".to_string());
+        }
         #[cfg(target_os = "windows")]
         {
             let mut cmd = Command::new("taskkill");
@@ -358,7 +443,7 @@ fn cancel_nscb() -> Result<(), String> {
             }
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), not(target_os = "android")))]
         {
             Command::new("kill")
                 .args(["-9", &pid.to_string()])
@@ -415,7 +500,9 @@ fn save_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(),
 
 #[tauri::command]
 fn get_platform() -> String {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    if cfg!(target_os = "android") {
+        "android-arm64".to_string()
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         "macos-arm64".to_string()
     } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
         "macos-amd64".to_string()
