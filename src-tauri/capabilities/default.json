@@ -8,6 +8,7 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-ask",
+    "fs:allow-read-file",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [
