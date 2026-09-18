@@ -8,7 +8,12 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-ask",
-    "fs:allow-open",
+    {
+      "identifier": "fs:allow-open",
+      "allow": [
+        { "path": "$APPCACHE/**" }
+      ]
+    },
     "fs:allow-read-file",
     "fs:allow-write-file",
     "fs:allow-remove",
