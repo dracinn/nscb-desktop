@@ -4,12 +4,20 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream version tag to build (for example, v2.7.2)
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   build:
+    env:
+      RELEASE_TAG: ${{ inputs.version || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +69,7 @@ jobs:
       - name: Sync version from git tag
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "Setting version to $VERSION"
           node -e "
             const fs = require('fs');
@@ -109,6 +117,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.version || github.ref_name }}
 
     steps:
       - name: Checkout
@@ -129,7 +139,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${{ github.ref_name }}"
+          tag="$RELEASE_TAG"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" artifacts/* --repo "${{ github.repository }}" --clobber
           else
