@@ -16,6 +16,8 @@
     },
     "fs:allow-read-file",
     "fs:allow-write-file",
+    "fs:read-files",
+    "fs:write-files",
     "fs:allow-remove",
     {
       "identifier": "fs:allow-read-text-file",
