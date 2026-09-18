@@ -29,14 +29,12 @@ jobs:
       - name: Initialize Android project
         run: npm run android:init
 
-      - name: Build ARM64 APK and AAB
-        run: npm run android:build
+      - name: Build installable ARM64 debug APK
+        run: npm run android:build:debug
 
-      - name: Upload Android artifacts
+      - name: Upload installable Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: nscb-desktop-android-arm64
-          path: |
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          name: nscb-desktop-android-arm64-installable
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*debug.apk
           if-no-files-found: error
