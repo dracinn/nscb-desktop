@@ -268,7 +268,8 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
 #[cfg(target_os = "android")]
 fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Result<(), String> {
     use clap::Parser;
-    use std::os::fd::AsRawFd;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::io::{Read, Seek, SeekFrom, Write};
     use tauri_plugin_fs::{FsExt, OpenOptions};
 
     {
@@ -290,8 +291,6 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
             },
         );
 
-        let mut opened_files = Vec::new();
-        let mut descriptor_links = Vec::new();
         let resolved_args = args
             .into_iter()
             .map(|arg| {
@@ -303,10 +302,11 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
                     .map_err(|error| format!("Invalid Android document URI: {error}"))?;
                 let mut options = OpenOptions::new();
                 options.read(true);
-                let file = app
+                let mut source = app
                     .fs()
                     .open(uri, options)
                     .map_err(|error| format!("Failed to open Android document: {error}"))?;
+                let source_size = source.metadata().ok().map(|metadata| metadata.len());
 
                 let raw_name = arg
                     .rsplit_once("%2F")
@@ -319,44 +319,88 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
                     .chars()
                     .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') { ch } else { '_' })
                     .collect();
-                let link_path = app_tools_dir(&app)?
-                    .join("android-fd-inputs")
-                    .join(format!("{}-{safe_name}", opened_files.len()));
-                if let Some(parent) = link_path.parent() {
+                let mut hasher = DefaultHasher::new();
+                arg.hash(&mut hasher);
+                let cache_path = app_tools_dir(&app)?
+                    .join("android-native-inputs")
+                    .join(format!("{:016x}-{safe_name}", hasher.finish()));
+                if let Some(parent) = cache_path.parent() {
                     std::fs::create_dir_all(parent)
-                        .map_err(|error| format!("Failed to create Android input link directory: {error}"))?;
+                        .map_err(|error| format!("Failed to create Android input cache: {error}"))?;
                 }
-                let _ = std::fs::remove_file(&link_path);
-                std::os::unix::fs::symlink(format!("/proc/self/fd/{}", file.as_raw_fd()), &link_path)
-                    .map_err(|error| format!("Failed to link Android document: {error}"))?;
 
-                opened_files.push(file);
-                descriptor_links.push(link_path.clone());
-                Ok(link_path.to_string_lossy().into_owned())
-            })
-            .collect::<Result<Vec<_>, String>>();
+                let cached_size = std::fs::metadata(&cache_path).ok().map(|metadata| metadata.len());
+                if source_size.is_some() && source_size == cached_size {
+                    let _ = app.emit(
+                        "nscb-stdout",
+                        StdoutEvent {
+                            op: operation.clone(),
+                            line: format!("[ANDROID] Reusing native cached copy of {safe_name}"),
+                        },
+                    );
+                    return Ok(cache_path.to_string_lossy().into_owned());
+                }
 
-        let result = resolved_args.and_then(|resolved_args| {
-            if !opened_files.is_empty() {
                 let _ = app.emit(
                     "nscb-stdout",
                     StdoutEvent {
                         op: operation.clone(),
-                        line: "[ANDROID] Using direct document access (zero-copy)".to_string(),
+                        line: format!("[ANDROID] Preparing {safe_name} with native I/O"),
                     },
                 );
-            }
+                source
+                    .seek(SeekFrom::Start(0))
+                    .map_err(|error| format!("Failed to seek Android document: {error}"))?;
+                let mut destination = std::fs::File::create(&cache_path)
+                    .map_err(|error| format!("Failed to create Android input cache file: {error}"))?;
+                let mut buffer = vec![0_u8; 16 * 1024 * 1024];
+                let mut copied = 0_u64;
+                let mut last_percent = 0_u64;
+                loop {
+                    let count = source
+                        .read(&mut buffer)
+                        .map_err(|error| format!("Failed to read Android document: {error}"))?;
+                    if count == 0 {
+                        break;
+                    }
+                    destination
+                        .write_all(&buffer[..count])
+                        .map_err(|error| format!("Failed to cache Android document: {error}"))?;
+                    copied += count as u64;
+
+                    if let Some(total) = source_size.filter(|total| *total > 0) {
+                        let percent = (copied.saturating_mul(100) / total).min(99);
+                        if percent >= last_percent + 5 {
+                            last_percent = percent;
+                            let _ = app.emit(
+                                "nscb-stdout",
+                                StdoutEvent {
+                                    op: operation.clone(),
+                                    line: format!(
+                                        "[ANDROID] Native preparation: {percent}% ({} / {} MiB)",
+                                        copied / 1_048_576,
+                                        total / 1_048_576
+                                    ),
+                                },
+                            );
+                        }
+                    }
+                }
+                destination
+                    .flush()
+                    .map_err(|error| format!("Failed to finish Android input cache: {error}"))?;
+
+                Ok(cache_path.to_string_lossy().into_owned())
+            })
+            .collect::<Result<Vec<_>, String>>();
+
+        let result = resolved_args.and_then(|resolved_args| {
             let mut argv = vec!["nscb".to_string()];
             argv.extend(resolved_args);
             nscb::cli::Args::try_parse_from(argv)
                 .map_err(|error| error.to_string())
                 .and_then(|parsed| nscb::cli::dispatch(parsed).map_err(|error| error.to_string()))
         });
-
-        for link in descriptor_links {
-            let _ = std::fs::remove_file(link);
-        }
-        drop(opened_files);
 
         let code = if let Err(message) = result {
             let _ = app.emit(

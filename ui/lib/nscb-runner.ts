@@ -236,9 +236,8 @@ export class NscbRunner extends Emitter {
     }
 
     private async stageAndroidInputs(files: string[]): Promise<{ files: string[]; staged: string[] }> {
-        // Android content URIs are resolved to native file descriptors by the Rust
-        // runner. Passing them through avoids copying multi-gigabyte files through
-        // the WebView IPC bridge before every operation.
+        // Android content URIs are resolved and cached by the native Rust runner.
+        // Passing them through avoids copying multi-gigabyte files over WebView IPC.
         return { files, staged: [] };
     }
 
