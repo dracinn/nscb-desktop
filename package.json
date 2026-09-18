@@ -13,6 +13,7 @@
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
     "android:build": "tauri android build --target aarch64",
+    "android:build:debug": "tauri android build --debug --target aarch64",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest"
