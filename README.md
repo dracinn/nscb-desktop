@@ -26,7 +26,7 @@ Built with Tauri v2 + React + Vite. Powered by [nscb_rust](https://github.com/cx
 - Configurable NUTDB source URL override
 - Configurable temporary directory for large backend working files
 - First-launch setup wizard for encryption keys
-- Cross-platform: Windows x86_64, Linux x86_64, macOS ARM64
+- Cross-platform: Windows x86_64, Linux x86_64, macOS ARM64 and Intel x86_64
 
 ## Supported Platforms
 
@@ -35,6 +35,7 @@ Built with Tauri v2 + React + Vite. Powered by [nscb_rust](https://github.com/cx
 | Windows | x86_64 | `nscb_rust.exe` |
 | Linux | x86_64 | `nscb_rust-linux-amd64` |
 | macOS | ARM64 | `nscb_rust-macos-arm64` |
+| macOS | Intel x86_64 | `nscb_rust-macos-amd64` |
 
 ## Prerequisites
 
@@ -80,6 +81,8 @@ npm run build
 # Portable folder at release/NSCB Desktop/
 npm run dist:portable
 ```
+
+Fork release builds download the helper backend from `<fork-owner>/nscb_rust`. Fork both repositories under the same GitHub account so the Intel app can obtain `nscb_rust-macos-amd64`. Set `VITE_NSCB_BACKEND_REPO=owner/repository` at build time to use a differently named backend fork.
 
 ## Project Layout
 
