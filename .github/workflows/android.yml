@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -38,3 +38,28 @@ jobs:
           name: nscb-desktop-android-arm64-installable
           path: src-tauri/gen/android/app/build/outputs/apk/**/*debug.apk
           if-no-files-found: error
+
+      - name: Publish direct APK download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk_path="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*debug.apk' -print -quit)"
+          cp "$apk_path" NSCB-Desktop-Android-ARM64.apk
+          sha256sum NSCB-Desktop-Android-ARM64.apk > NSCB-Desktop-Android-ARM64.apk.sha256
+          git tag -f android-latest "$GITHUB_SHA"
+          git push origin refs/tags/android-latest --force
+          if gh release view android-latest >/dev/null 2>&1; then
+            gh release edit android-latest \
+              --title "NSCB Desktop Android ARM64 (Latest)" \
+              --notes "Latest installable Android ARM64 development build from the android branch." \
+              --prerelease
+          else
+            gh release create android-latest \
+              --title "NSCB Desktop Android ARM64 (Latest)" \
+              --notes "Latest installable Android ARM64 development build from the android branch." \
+              --prerelease
+          fi
+          gh release upload android-latest \
+            NSCB-Desktop-Android-ARM64.apk \
+            NSCB-Desktop-Android-ARM64.apk.sha256 \
+            --clobber
