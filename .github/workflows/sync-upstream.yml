@@ -47,4 +47,4 @@ jobs:
           fi
           git tag --force "$latest_tag"
           git push --force origin "refs/tags/$latest_tag"
-          gh workflow run release.yml --ref main -f version="$latest_tag"
+          gh workflow run release.yml --repo "${{ github.repository }}" --ref main -f version="$latest_tag"
