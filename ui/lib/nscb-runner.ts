@@ -1,6 +1,7 @@
 import { join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { mkdir, open as openFile, remove } from '@tauri-apps/plugin-fs';
 
 export interface RunnerEvent {
     progress: { op: string; percent: number; message: string };
@@ -45,6 +46,17 @@ export function getDirname(filePath: string): string {
     const normalized = filePath.replace(/\\/g, '/');
     const lastSlash = normalized.lastIndexOf('/');
     return lastSlash >= 0 ? normalized.substring(0, lastSlash) : '.';
+}
+
+function getAndroidDocumentName(uri: string): string {
+    try {
+        const decoded = decodeURIComponent(uri);
+        const documentId = decoded.substring(decoded.lastIndexOf('/') + 1);
+        const relativePath = documentId.includes(':') ? documentId.substring(documentId.indexOf(':') + 1) : documentId;
+        return getBasename(relativePath) || 'input.bin';
+    } catch {
+        return getBasename(uri) || 'input.bin';
+    }
 }
 
 export function buildArgs(operation: string, files: string[], options: Record<string, any> = {}, keysPath: string | null = null): string[] {
@@ -235,6 +247,59 @@ export class NscbRunner extends Emitter {
         return buildArgs(operation, files, { ...options, tempDir }, keysPath);
     }
 
+    private async stageAndroidInputs(files: string[]): Promise<{ files: string[]; staged: string[] }> {
+        const contentUris = files.filter(file => file.startsWith('content://'));
+        if (contentUris.length === 0 || !this.toolsDir) return { files, staged: [] };
+
+        const stageDir = await join(this.toolsDir, 'staged-inputs');
+        await mkdir(stageDir, { recursive: true });
+        const staged: string[] = [];
+        const resolved: string[] = [];
+
+        try {
+            for (let index = 0; index < files.length; index++) {
+                const sourcePath = files[index];
+                if (!sourcePath.startsWith('content://')) {
+                    resolved.push(sourcePath);
+                    continue;
+                }
+
+                const originalName = getAndroidDocumentName(sourcePath);
+                const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const destinationPath = await join(stageDir, `${Date.now()}-${index}-${safeName}`);
+                this.emit('output', {
+                    op: this.currentOperation || 'android',
+                    line: `[ANDROID] Preparing ${originalName} for processing...`,
+                });
+
+                const source = await openFile(sourcePath, { read: true });
+                const destination = await openFile(destinationPath, {
+                    write: true,
+                    create: true,
+                    truncate: true,
+                });
+                try {
+                    const buffer = new Uint8Array(4 * 1024 * 1024);
+                    while (true) {
+                        const bytesRead = await source.read(buffer);
+                        if (bytesRead === null || bytesRead === 0) break;
+                        await destination.write(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+                    }
+                } finally {
+                    await source.close();
+                    await destination.close();
+                }
+
+                staged.push(destinationPath);
+                resolved.push(destinationPath);
+            }
+            return { files: resolved, staged };
+        } catch (error) {
+            await Promise.all(staged.map(path => remove(path).catch(() => {})));
+            throw new Error(`Failed to prepare Android input file: ${String(error)}`);
+        }
+    }
+
     private computeVerifyOutputPath(filelistPath: string): string {
         const dir = getDirname(filelistPath);
         const base = getBasename(filelistPath).replace(/\.txt$/i, '');
@@ -283,16 +348,29 @@ export class NscbRunner extends Emitter {
                 });
             }
 
+            let stagedPaths: string[] = [];
+            let runnableFiles: string[];
+            try {
+                const staged = await this.stageAndroidInputs(currentFiles);
+                runnableFiles = staged.files;
+                stagedPaths = staged.staged;
+            } catch (error) {
+                this.currentOperation = null;
+                this.emit('nscb-error', { op: operation, message: String(error) });
+                this.emit('done', { op: operation, code: -1 });
+                return;
+            }
+
             // For verify: use filelist mode (non-interactive)
             let runOptions = options;
             let verifyOutputPath: string | null = null;
             if (operation === 'verify') {
-                const filelistPath = await invoke<string>('create_verify_filelist', { targetPath: currentFiles[0] });
+                const filelistPath = await invoke<string>('create_verify_filelist', { targetPath: runnableFiles[0] });
                 verifyOutputPath = this.computeVerifyOutputPath(filelistPath);
                 runOptions = { ...options, filelistPath };
             }
 
-            const args = await this.buildArgs(operation, currentFiles, runOptions);
+            const args = await this.buildArgs(operation, runnableFiles, runOptions);
             this.lastOutputLine = '';
             this.emit('log', `Running: nscb_rust ${args.join(' ')}`);
             this.emit('output', { op: operation, line: `> nscb_rust ${args.join(' ')}` });
@@ -311,6 +389,8 @@ export class NscbRunner extends Emitter {
                     // result file may not exist if verify failed early
                 }
             }
+
+            await Promise.all(stagedPaths.map(path => remove(path).catch(() => {})));
 
             if (code !== 0) {
                 this.currentOperation = null;
