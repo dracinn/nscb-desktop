@@ -22,7 +22,10 @@ jobs:
             label: linux
           - os: macos-latest
             target: aarch64-apple-darwin
-            label: macos
+            label: macos-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            label: macos-amd64
 
     runs-on: ${{ matrix.os }}
 
@@ -72,27 +75,29 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        run: npm run build
+        env:
+          VITE_NSCB_BACKEND_REPO: ${{ github.repository_owner }}/nscb_rust
+        run: npm run build -- --target ${{ matrix.target }}
 
       - name: Stage artifact (Windows)
         if: matrix.label == 'windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path staged | Out-Null
-          Copy-Item "src-tauri/target/release/nscb-desktop.exe" "staged/nscb-desktop-windows-amd64.exe"
+          Copy-Item "src-tauri/target/${{ matrix.target }}/release/nscb-desktop.exe" "staged/nscb-desktop-windows-amd64.exe"
 
       - name: Stage artifact (Linux)
         if: matrix.label == 'linux'
         run: |
           mkdir -p staged
-          cp src-tauri/target/release/bundle/appimage/*.AppImage staged/nscb-desktop-linux-amd64.AppImage
-          cp src-tauri/target/release/bundle/deb/*.deb staged/nscb-desktop-linux-amd64.deb
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage staged/nscb-desktop-linux-amd64.AppImage
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb staged/nscb-desktop-linux-amd64.deb
 
       - name: Stage artifact (macOS)
-        if: matrix.label == 'macos'
+        if: startsWith(matrix.label, 'macos-')
         run: |
           mkdir -p staged
-          cp src-tauri/target/release/bundle/dmg/*.dmg staged/nscb-desktop-macos-arm64.dmg
+          cp src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg staged/nscb-desktop-${{ matrix.label }}.dmg
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
