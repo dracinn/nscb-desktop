@@ -268,6 +268,8 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
 #[cfg(target_os = "android")]
 fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Result<(), String> {
     use clap::Parser;
+    use std::os::fd::AsRawFd;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
 
     {
         let mut lock = running_pid()
@@ -288,11 +290,73 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
             },
         );
 
-        let mut argv = vec!["nscb".to_string()];
-        argv.extend(args);
-        let result = nscb::cli::Args::try_parse_from(argv)
-            .map_err(|error| error.to_string())
-            .and_then(|parsed| nscb::cli::dispatch(parsed).map_err(|error| error.to_string()));
+        let mut opened_files = Vec::new();
+        let mut descriptor_links = Vec::new();
+        let resolved_args = args
+            .into_iter()
+            .map(|arg| {
+                if !arg.starts_with("content://") {
+                    return Ok(arg);
+                }
+
+                let uri = tauri::Url::parse(&arg)
+                    .map_err(|error| format!("Invalid Android document URI: {error}"))?;
+                let mut options = OpenOptions::new();
+                options.read(true);
+                let file = app
+                    .fs()
+                    .open(uri, options)
+                    .map_err(|error| format!("Failed to open Android document: {error}"))?;
+
+                let raw_name = arg
+                    .rsplit_once("%2F")
+                    .or_else(|| arg.rsplit_once("%2f"))
+                    .map(|(_, name)| name)
+                    .or_else(|| arg.rsplit_once('/').map(|(_, name)| name))
+                    .unwrap_or("android-input.bin");
+                let safe_name: String = raw_name
+                    .replace("%20", "_")
+                    .chars()
+                    .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') { ch } else { '_' })
+                    .collect();
+                let link_path = app_tools_dir(&app)?
+                    .join("android-fd-inputs")
+                    .join(format!("{}-{safe_name}", opened_files.len()));
+                if let Some(parent) = link_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|error| format!("Failed to create Android input link directory: {error}"))?;
+                }
+                let _ = std::fs::remove_file(&link_path);
+                std::os::unix::fs::symlink(format!("/proc/self/fd/{}", file.as_raw_fd()), &link_path)
+                    .map_err(|error| format!("Failed to link Android document: {error}"))?;
+
+                opened_files.push(file);
+                descriptor_links.push(link_path.clone());
+                Ok(link_path.to_string_lossy().into_owned())
+            })
+            .collect::<Result<Vec<_>, String>>();
+
+        let result = resolved_args.and_then(|resolved_args| {
+            if !opened_files.is_empty() {
+                let _ = app.emit(
+                    "nscb-stdout",
+                    StdoutEvent {
+                        op: operation.clone(),
+                        line: "[ANDROID] Using direct document access (zero-copy)".to_string(),
+                    },
+                );
+            }
+            let mut argv = vec!["nscb".to_string()];
+            argv.extend(resolved_args);
+            nscb::cli::Args::try_parse_from(argv)
+                .map_err(|error| error.to_string())
+                .and_then(|parsed| nscb::cli::dispatch(parsed).map_err(|error| error.to_string()))
+        });
+
+        for link in descriptor_links {
+            let _ = std::fs::remove_file(link);
+        }
+        drop(opened_files);
 
         let code = if let Err(message) = result {
             let _ = app.emit(
