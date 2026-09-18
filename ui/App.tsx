@@ -202,7 +202,7 @@ function Sidebar({ activePage, onNavigate, appVersion, appUpdate }: { activePage
             <div className="sidebar-brand">
                 <div className="brand-logo">{Icons.switchLogo}</div>
                 <div className="brand-text">
-                    <h1>NSCB Desktop</h1>
+                    <h1>NCSB - Android</h1>
                     <span>v{appVersion}{appUpdate && <>{' | '}<button className="update-link" onClick={() => api.openExternal(appUpdate.url)}>{appUpdate.tag} available</button></>}</span>
                 </div>
             </div>
@@ -1506,7 +1506,7 @@ function SetupPage({
         <div className="setup-screen">
             <div className="setup-card">
                 <div className="setup-logo">{Icons.switchLogo}</div>
-                <h1 className="setup-title">NSCB Desktop</h1>
+                <h1 className="setup-title">NCSB - Android</h1>
                 <p className="setup-subtitle">
                     One-time setup: import encryption keys
                 </p>
@@ -1539,7 +1539,7 @@ function SetupPage({
                 )}
 
                 <div className="setup-footer">
-                    NSCB Desktop v{appVersion}
+                    NCSB - Android v{appVersion}
                 </div>
             </div>
         </div>
