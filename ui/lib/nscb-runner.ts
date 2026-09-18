@@ -158,6 +158,7 @@ export class NscbRunner extends Emitter {
     private backendUnlisten: UnlistenFn[] = [];
     private doneResolver: ((code: number) => void) | null = null;
     private initPromise: Promise<void> | null = null;
+    private stagedInputCache = new Map<string, { path: string; size: number | null }>();
 
     async init(): Promise<void> {
         if (this._ready) return;
@@ -267,12 +268,24 @@ export class NscbRunner extends Emitter {
                 const originalName = getAndroidDocumentName(sourcePath);
                 const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
                 const destinationPath = await join(stageDir, `${Date.now()}-${index}-${safeName}`);
+                const source = await openFile(sourcePath, { read: true });
+                const sourceInfo = await source.stat().catch(() => null);
+                const totalBytes = sourceInfo?.size ?? null;
+                const cached = this.stagedInputCache.get(sourcePath);
+                if (cached && (totalBytes === null || cached.size === totalBytes)) {
+                    await source.close();
+                    this.emit('output', {
+                        op: this.currentOperation || 'android',
+                        line: `[ANDROID] Reusing prepared copy of ${originalName}`,
+                    });
+                    resolved.push(cached.path);
+                    continue;
+                }
+
                 this.emit('output', {
                     op: this.currentOperation || 'android',
                     line: `[ANDROID] Preparing ${originalName} for processing...`,
                 });
-
-                const source = await openFile(sourcePath, { read: true });
                 const destination = await openFile(destinationPath, {
                     write: true,
                     create: true,
@@ -280,10 +293,32 @@ export class NscbRunner extends Emitter {
                 });
                 try {
                     const buffer = new Uint8Array(4 * 1024 * 1024);
+                    let copiedBytes = 0;
+                    let lastReportedPercent = -1;
                     while (true) {
+                        if (this.cancelled) throw new Error('File preparation cancelled');
                         const bytesRead = await source.read(buffer);
                         if (bytesRead === null || bytesRead === 0) break;
                         await destination.write(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+                        copiedBytes += bytesRead;
+
+                        if (totalBytes && totalBytes > 0) {
+                            const percent = Math.min(99, Math.floor((copiedBytes / totalBytes) * 100));
+                            if (percent >= lastReportedPercent + 1) {
+                                lastReportedPercent = percent;
+                                this.emit('progress', {
+                                    op: this.currentOperation || 'android',
+                                    percent,
+                                    message: `Preparing ${originalName}: ${(copiedBytes / 1048576).toFixed(0)} / ${(totalBytes / 1048576).toFixed(0)} MiB`,
+                                });
+                            }
+                        } else if (copiedBytes % (64 * 1024 * 1024) < buffer.length) {
+                            this.emit('progress', {
+                                op: this.currentOperation || 'android',
+                                percent: 0,
+                                message: `Preparing ${originalName}: ${(copiedBytes / 1048576).toFixed(0)} MiB copied`,
+                            });
+                        }
                     }
                 } finally {
                     await source.close();
@@ -292,6 +327,7 @@ export class NscbRunner extends Emitter {
 
                 staged.push(destinationPath);
                 resolved.push(destinationPath);
+                this.stagedInputCache.set(sourcePath, { path: destinationPath, size: totalBytes });
             }
             return { files: resolved, staged };
         } catch (error) {
@@ -348,12 +384,10 @@ export class NscbRunner extends Emitter {
                 });
             }
 
-            let stagedPaths: string[] = [];
             let runnableFiles: string[];
             try {
                 const staged = await this.stageAndroidInputs(currentFiles);
                 runnableFiles = staged.files;
-                stagedPaths = staged.staged;
             } catch (error) {
                 this.currentOperation = null;
                 this.emit('nscb-error', { op: operation, message: String(error) });
@@ -389,8 +423,6 @@ export class NscbRunner extends Emitter {
                     // result file may not exist if verify failed early
                 }
             }
-
-            await Promise.all(stagedPaths.map(path => remove(path).catch(() => {})));
 
             if (code !== 0) {
                 this.currentOperation = null;
