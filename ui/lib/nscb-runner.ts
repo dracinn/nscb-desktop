@@ -1,7 +1,6 @@
 import { join } from '@tauri-apps/api/path';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { mkdir, open as openFile, remove } from '@tauri-apps/plugin-fs';
 
 export interface RunnerEvent {
     progress: { op: string; percent: number; message: string };
@@ -46,17 +45,6 @@ export function getDirname(filePath: string): string {
     const normalized = filePath.replace(/\\/g, '/');
     const lastSlash = normalized.lastIndexOf('/');
     return lastSlash >= 0 ? normalized.substring(0, lastSlash) : '.';
-}
-
-function getAndroidDocumentName(uri: string): string {
-    try {
-        const decoded = decodeURIComponent(uri);
-        const documentId = decoded.substring(decoded.lastIndexOf('/') + 1);
-        const relativePath = documentId.includes(':') ? documentId.substring(documentId.indexOf(':') + 1) : documentId;
-        return getBasename(relativePath) || 'input.bin';
-    } catch {
-        return getBasename(uri) || 'input.bin';
-    }
 }
 
 export function buildArgs(operation: string, files: string[], options: Record<string, any> = {}, keysPath: string | null = null): string[] {
@@ -158,7 +146,6 @@ export class NscbRunner extends Emitter {
     private backendUnlisten: UnlistenFn[] = [];
     private doneResolver: ((code: number) => void) | null = null;
     private initPromise: Promise<void> | null = null;
-    private stagedInputCache = new Map<string, { path: string; size: number | null }>();
 
     async init(): Promise<void> {
         if (this._ready) return;
@@ -249,91 +236,10 @@ export class NscbRunner extends Emitter {
     }
 
     private async stageAndroidInputs(files: string[]): Promise<{ files: string[]; staged: string[] }> {
-        const contentUris = files.filter(file => file.startsWith('content://'));
-        if (contentUris.length === 0 || !this.toolsDir) return { files, staged: [] };
-
-        const stageDir = await join(this.toolsDir, 'staged-inputs');
-        await mkdir(stageDir, { recursive: true });
-        const staged: string[] = [];
-        const resolved: string[] = [];
-
-        try {
-            for (let index = 0; index < files.length; index++) {
-                const sourcePath = files[index];
-                if (!sourcePath.startsWith('content://')) {
-                    resolved.push(sourcePath);
-                    continue;
-                }
-
-                const originalName = getAndroidDocumentName(sourcePath);
-                const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-                const destinationPath = await join(stageDir, `${Date.now()}-${index}-${safeName}`);
-                const source = await openFile(sourcePath, { read: true });
-                const sourceInfo = await source.stat().catch(() => null);
-                const totalBytes = sourceInfo?.size ?? null;
-                const cached = this.stagedInputCache.get(sourcePath);
-                if (cached && (totalBytes === null || cached.size === totalBytes)) {
-                    await source.close();
-                    this.emit('output', {
-                        op: this.currentOperation || 'android',
-                        line: `[ANDROID] Reusing prepared copy of ${originalName}`,
-                    });
-                    resolved.push(cached.path);
-                    continue;
-                }
-
-                this.emit('output', {
-                    op: this.currentOperation || 'android',
-                    line: `[ANDROID] Preparing ${originalName} for processing...`,
-                });
-                const destination = await openFile(destinationPath, {
-                    write: true,
-                    create: true,
-                    truncate: true,
-                });
-                try {
-                    const buffer = new Uint8Array(4 * 1024 * 1024);
-                    let copiedBytes = 0;
-                    let lastReportedPercent = -1;
-                    while (true) {
-                        if (this.cancelled) throw new Error('File preparation cancelled');
-                        const bytesRead = await source.read(buffer);
-                        if (bytesRead === null || bytesRead === 0) break;
-                        await destination.write(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
-                        copiedBytes += bytesRead;
-
-                        if (totalBytes && totalBytes > 0) {
-                            const percent = Math.min(99, Math.floor((copiedBytes / totalBytes) * 100));
-                            if (percent >= lastReportedPercent + 1) {
-                                lastReportedPercent = percent;
-                                this.emit('progress', {
-                                    op: this.currentOperation || 'android',
-                                    percent,
-                                    message: `Preparing ${originalName}: ${(copiedBytes / 1048576).toFixed(0)} / ${(totalBytes / 1048576).toFixed(0)} MiB`,
-                                });
-                            }
-                        } else if (copiedBytes % (64 * 1024 * 1024) < buffer.length) {
-                            this.emit('progress', {
-                                op: this.currentOperation || 'android',
-                                percent: 0,
-                                message: `Preparing ${originalName}: ${(copiedBytes / 1048576).toFixed(0)} MiB copied`,
-                            });
-                        }
-                    }
-                } finally {
-                    await source.close();
-                    await destination.close();
-                }
-
-                staged.push(destinationPath);
-                resolved.push(destinationPath);
-                this.stagedInputCache.set(sourcePath, { path: destinationPath, size: totalBytes });
-            }
-            return { files: resolved, staged };
-        } catch (error) {
-            await Promise.all(staged.map(path => remove(path).catch(() => {})));
-            throw new Error(`Failed to prepare Android input file: ${String(error)}`);
-        }
+        // Android content URIs are resolved to native file descriptors by the Rust
+        // runner. Passing them through avoids copying multi-gigabyte files through
+        // the WebView IPC bridge before every operation.
+        return { files, staged: [] };
     }
 
     private computeVerifyOutputPath(filelistPath: string): string {
