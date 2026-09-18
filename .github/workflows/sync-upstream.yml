@@ -1,0 +1,47 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Merge upstream main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/cxfcxf/nscb-desktop.git
+          git fetch --no-tags upstream main
+          git merge --no-edit upstream/main
+          git push origin main
+
+      - name: Mirror latest upstream version on patched main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_tag="$(git ls-remote --tags --refs upstream 'v*' | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
+          test -n "$latest_tag"
+          if gh release view "$latest_tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $latest_tag already exists in the fork"
+            exit 0
+          fi
+          git tag --force "$latest_tag"
+          git push --force origin "refs/tags/$latest_tag"
+          gh workflow run release.yml --ref main -f version="$latest_tag"
