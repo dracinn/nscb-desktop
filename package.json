@@ -10,6 +10,9 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "dist:portable": "tauri build && node scripts/portable.mjs",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build --target aarch64",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest"
