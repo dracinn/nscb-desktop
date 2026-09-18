@@ -335,7 +335,7 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
                         "nscb-stdout",
                         StdoutEvent {
                             op: operation.clone(),
-                            line: format!("[ANDROID] Reusing native cached copy of {safe_name}"),
+                            line: format!("[ANDROID] Reusing native cached copy of {safe_name}: 99%. Starting NSCB processing..."),
                         },
                     );
                     return Ok(cache_path.to_string_lossy().into_owned());
@@ -370,7 +370,7 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
 
                     if let Some(total) = source_size.filter(|total| *total > 0) {
                         let percent = (copied.saturating_mul(100) / total).min(99);
-                        if percent >= last_percent + 5 {
+                        if percent > last_percent {
                             last_percent = percent;
                             let _ = app.emit(
                                 "nscb-stdout",
@@ -389,17 +389,53 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
                 destination
                     .flush()
                     .map_err(|error| format!("Failed to finish Android input cache: {error}"))?;
+                let _ = app.emit(
+                    "nscb-stdout",
+                    StdoutEvent {
+                        op: operation.clone(),
+                        line: format!(
+                            "[ANDROID] Native preparation complete: 99% ({} MiB). Starting NSCB processing...",
+                            copied / 1_048_576
+                        ),
+                    },
+                );
 
                 Ok(cache_path.to_string_lossy().into_owned())
             })
             .collect::<Result<Vec<_>, String>>();
 
         let result = resolved_args.and_then(|resolved_args| {
+            let _ = app.emit(
+                "nscb-stdout",
+                StdoutEvent {
+                    op: operation.clone(),
+                    line: "[PROCESSING] NSCB is reading and analyzing the prepared file...".to_string(),
+                },
+            );
+            let processing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let heartbeat_flag = processing.clone();
+            let heartbeat_app = app.clone();
+            let heartbeat_operation = operation.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                if !heartbeat_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let _ = heartbeat_app.emit(
+                    "nscb-stdout",
+                    StdoutEvent {
+                        op: heartbeat_operation.clone(),
+                        line: "[PROCESSING] NSCB is still working...".to_string(),
+                    },
+                );
+            });
             let mut argv = vec!["nscb".to_string()];
             argv.extend(resolved_args);
-            nscb::cli::Args::try_parse_from(argv)
+            let dispatch_result = nscb::cli::Args::try_parse_from(argv)
                 .map_err(|error| error.to_string())
-                .and_then(|parsed| nscb::cli::dispatch(parsed).map_err(|error| error.to_string()))
+                .and_then(|parsed| nscb::cli::dispatch(parsed).map_err(|error| error.to_string()));
+            processing.store(false, std::sync::atomic::Ordering::Relaxed);
+            dispatch_result
         });
 
         let code = if let Err(message) = result {
