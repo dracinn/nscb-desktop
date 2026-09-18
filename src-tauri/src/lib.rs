@@ -93,11 +93,11 @@ struct DoneEvent {
 }
 
 #[tauri::command]
-fn import_keys(app: tauri::AppHandle, src_path: String) -> Result<(), String> {
+fn import_keys(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
     let tools_dir = app_tools_dir(&app)?;
 
     let dst_prod = tools_dir.join("prod.keys");
-    std::fs::copy(&src_path, &dst_prod).map_err(|e| format!("Failed to copy prod.keys: {e}"))?;
+    std::fs::write(&dst_prod, data).map_err(|e| format!("Failed to write prod.keys: {e}"))?;
     Ok(())
 }
 
