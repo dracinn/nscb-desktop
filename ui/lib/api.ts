@@ -1,5 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { readDir, rename as fsRename } from '@tauri-apps/plugin-fs';
+import { readDir, readFile, rename as fsRename } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
@@ -41,10 +41,11 @@ export async function hasBackend(): Promise<boolean> {
 }
 
 export async function importKeys(): Promise<{ ok: boolean; error?: string }> {
+    const platform = await invoke<string>('get_platform').catch(() => '');
     const selected = await open({
         title: 'Select your encryption keys file',
         multiple: false,
-        filters: [
+        filters: platform.startsWith('android') ? undefined : [
             { name: 'Keys Files', extensions: ['keys', 'txt'] },
             { name: 'All Files', extensions: ['*'] },
         ],
@@ -53,7 +54,8 @@ export async function importKeys(): Promise<{ ok: boolean; error?: string }> {
 
     const srcFile = selected as string;
     try {
-        await invoke('import_keys', { srcPath: srcFile });
+        const data = await readFile(srcFile);
+        await invoke('import_keys', { data: Array.from(data) });
         return { ok: true };
     } catch (e: any) {
         return { ok: false, error: `Failed to copy keys: ${e.message || e}` };
