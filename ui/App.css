@@ -1464,6 +1464,7 @@ select {
 
 /* ---- Responsive ---- */
 @media (max-width: 800px) {
+  .app-shell { min-width: 0; }
   .sidebar {
     width: 60px;
     min-width: 60px;
@@ -1476,4 +1477,9 @@ select {
   .sidebar-footer { font-size: 0; }
   .footer-dot { margin: 0; }
   .options-panel { grid-template-columns: 1fr; }
+  .main-content { padding: 14px; }
+  .drop-zone { min-height: 132px; padding: 20px 12px; }
+  .file-row { align-items: flex-start; }
+  .dir-picker-row { flex-wrap: wrap; }
+  button, input, select { min-height: 44px; }
 }
