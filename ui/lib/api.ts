@@ -112,6 +112,22 @@ export interface ReleaseInfo {
     downloadUrl: string;
 }
 
+type ReleaseAsset = { name?: string; browser_download_url?: string };
+const backendRepository = import.meta.env.VITE_NSCB_BACKEND_REPO || 'cxfcxf/nscb_rust';
+
+export function selectBackendAsset(platform: string, assets: ReleaseAsset[]): ReleaseAsset | undefined {
+    if (platform === 'macos-arm64') {
+        return assets.find((asset) => asset.name === 'nscb_rust-macos-arm64');
+    }
+    if (platform === 'macos-amd64') {
+        return assets.find((asset) => asset.name === 'nscb_rust-macos-amd64');
+    }
+    if (platform === 'linux') {
+        return assets.find((asset) => asset.name === 'nscb_rust-linux-amd64');
+    }
+    return assets.find((asset) => asset.name === 'nscb_rust.exe');
+}
+
 export async function getPlatform(): Promise<string> {
     try {
         return await invoke<string>('get_platform');
@@ -123,19 +139,12 @@ export async function getPlatform(): Promise<string> {
 export async function fetchLatestRelease(): Promise<ReleaseInfo | null> {
     try {
         const platform = await getPlatform();
-        const res = await fetch('https://api.github.com/repos/cxfcxf/nscb_rust/releases/latest');
+        const res = await fetch(`https://api.github.com/repos/${backendRepository}/releases/latest`);
         if (!res.ok) return null;
         const data = await res.json();
         const tag: string = data.tag_name ?? '';
-        const assets = data.assets as any[];
-        let asset: any;
-        if (platform === 'macos') {
-            asset = assets?.find((a: any) => typeof a.name === 'string' && a.name.includes('macos'));
-        } else if (platform === 'linux') {
-            asset = assets?.find((a: any) => typeof a.name === 'string' && a.name.includes('linux'));
-        } else {
-            asset = assets?.find((a: any) => typeof a.name === 'string' && a.name.endsWith('.exe'));
-        }
+        const assets = (data.assets ?? []) as ReleaseAsset[];
+        const asset = selectBackendAsset(platform, assets);
         if (!asset?.browser_download_url) return null;
         return { tag, downloadUrl: asset.browser_download_url };
     } catch {
