@@ -26,4 +26,4 @@ reqwest = { version = "0.12", features = ["blocking"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 clap = "4"
-nscb = { git = "https://github.com/dracinn/nscb_rust", branch = "android" }
+nscb = { git = "https://github.com/dracinn/nscb_rust", rev = "528344f1f36f3b53b724f62c18baefdf288375f7" }
