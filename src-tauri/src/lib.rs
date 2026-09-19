@@ -291,9 +291,7 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
             },
         );
 
-        let resolved_args = args
-            .into_iter()
-            .map(|arg| {
+        let resolve_android_arg = |arg: String| -> Result<String, String> {
                 if !arg.starts_with("content://") {
                     return Ok(arg);
                 }
@@ -401,8 +399,40 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
                 );
 
                 Ok(cache_path.to_string_lossy().into_owned())
-            })
-            .collect::<Result<Vec<_>, String>>();
+        };
+
+        let resolved_args = args
+            .into_iter()
+            .map(&resolve_android_arg)
+            .collect::<Result<Vec<_>, String>>()
+            .and_then(|resolved_args| {
+                let Some(filelist_index) = resolved_args
+                    .iter()
+                    .position(|arg| arg == "--text_file")
+                    .and_then(|index| resolved_args.get(index + 1).map(|_| index + 1))
+                else {
+                    return Ok(resolved_args);
+                };
+
+                let filelist_path = &resolved_args[filelist_index];
+                let filelist = std::fs::read_to_string(filelist_path)
+                    .map_err(|error| format!("Failed to read NSCB file list: {error}"))?;
+                let resolved_filelist = filelist
+                    .lines()
+                    .map(|line| {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            Ok(String::new())
+                        } else {
+                            resolve_android_arg(trimmed.to_string())
+                        }
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+                    .join("\n");
+                std::fs::write(filelist_path, format!("{resolved_filelist}\n"))
+                    .map_err(|error| format!("Failed to update NSCB file list: {error}"))?;
+                Ok(resolved_args)
+            });
 
         let result = resolved_args.and_then(|resolved_args| {
             let _ = app.emit(
