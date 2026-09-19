@@ -26,25 +26,47 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set monotonic Android version code
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          node -e 'const fs=require("fs"); const p="src-tauri/tauri.android.conf.json"; const c=JSON.parse(fs.readFileSync(p,"utf8")); c.bundle.android.versionCode=Number(process.env.ANDROID_VERSION_CODE); fs.writeFileSync(p, JSON.stringify(c,null,2)+"\n");'
+
       - name: Initialize Android project
         run: npm run android:init
 
       - name: Build installable ARM64 debug APK
         run: npm run android:build:debug
 
+      - name: Sign APK with persistent update key
+        env:
+          ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          ANDROID_SIGNING_CERT_BASE64: ${{ secrets.ANDROID_SIGNING_CERT_BASE64 }}
+        run: |
+          test -n "$ANDROID_SIGNING_KEY_BASE64"
+          test -n "$ANDROID_SIGNING_CERT_BASE64"
+          printf '%s' "$ANDROID_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing-key.pk8"
+          printf '%s' "$ANDROID_SIGNING_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing-cert.der"
+          apk_path="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*debug.apk' -print -quit)"
+          build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          "$build_tools/apksigner" sign \
+            --key "$RUNNER_TEMP/android-signing-key.pk8" \
+            --cert "$RUNNER_TEMP/android-signing-cert.der" \
+            --out NSCB-Desktop-Android-ARM64.apk \
+            "$apk_path"
+          "$build_tools/apksigner" verify --verbose --print-certs NSCB-Desktop-Android-ARM64.apk
+
       - name: Upload installable Android APK
         uses: actions/upload-artifact@v4
         with:
           name: nscb-desktop-android-arm64-installable
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*debug.apk
+          path: NSCB-Desktop-Android-ARM64.apk
           if-no-files-found: error
 
       - name: Publish direct APK download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          apk_path="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*debug.apk' -print -quit)"
-          cp "$apk_path" NSCB-Desktop-Android-ARM64.apk
           sha256sum NSCB-Desktop-Android-ARM64.apk > NSCB-Desktop-Android-ARM64.apk.sha256
           git tag -f android-latest "$GITHUB_SHA"
           git push origin refs/tags/android-latest --force
