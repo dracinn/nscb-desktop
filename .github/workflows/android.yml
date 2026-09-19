@@ -67,18 +67,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          app_version="$(node -p "require('./package.json').version")"
+          version_tag="v${app_version}-android.${GITHUB_RUN_NUMBER}"
           sha256sum NSCB-Desktop-Android-ARM64.apk > NSCB-Desktop-Android-ARM64.apk.sha256
+
+          gh release create "$version_tag" \
+            --target "$GITHUB_SHA" \
+            --title "NCSB - Android ${version_tag} (ARM64)" \
+            --notes "Installable ARM64 Android build. This version uses the persistent update-signing key and can update later signed builds in place." \
+            --prerelease \
+            NSCB-Desktop-Android-ARM64.apk \
+            NSCB-Desktop-Android-ARM64.apk.sha256
+
           git tag -f android-latest "$GITHUB_SHA"
           git push origin refs/tags/android-latest --force
           if gh release view android-latest >/dev/null 2>&1; then
             gh release edit android-latest \
-              --title "NSCB Desktop Android ARM64 (Latest)" \
-              --notes "Latest installable Android ARM64 development build from the android branch." \
+              --title "NCSB - Android ARM64 (Latest)" \
+              --notes "Latest installable Android ARM64 development build. Obtainium users should use the versioned v${app_version}-android.* releases." \
               --prerelease
           else
             gh release create android-latest \
-              --title "NSCB Desktop Android ARM64 (Latest)" \
-              --notes "Latest installable Android ARM64 development build from the android branch." \
+              --title "NCSB - Android ARM64 (Latest)" \
+              --notes "Latest installable Android ARM64 development build. Obtainium users should use the versioned v${app_version}-android.* releases." \
               --prerelease
           fi
           gh release upload android-latest \
