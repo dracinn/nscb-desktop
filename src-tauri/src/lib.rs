@@ -291,6 +291,98 @@ fn run_nscb(app: tauri::AppHandle, operation: String, args: Vec<String>) -> Resu
             },
         );
 
+        // Read-only info operations can use Android's Storage Access Framework
+        // stream directly. Keeping the document handle alive here avoids both
+        // a multi-gigabyte cache copy and fragile content-URI path conversion.
+        if operation == "info" {
+            if let Some(document_uri) = args.iter().find(|arg| arg.starts_with("content://")) {
+                let direct_result = (|| -> Result<String, String> {
+                    let uri = tauri::Url::parse(document_uri)
+                        .map_err(|error| format!("Invalid Android document URI: {error}"))?;
+                    let mut options = OpenOptions::new();
+                    options.read(true);
+                    let mut source = app
+                        .fs()
+                        .open(uri, options)
+                        .map_err(|error| format!("Failed to open Android document: {error}"))?;
+                    let display_name = document_uri
+                        .rsplit_once("%2F")
+                        .or_else(|| document_uri.rsplit_once("%2f"))
+                        .map(|(_, name)| name)
+                        .or_else(|| document_uri.rsplit_once('/').map(|(_, name)| name))
+                        .unwrap_or("android-input.nsp")
+                        .replace("%20", "_");
+                    let keys_path = args
+                        .windows(2)
+                        .find(|pair| pair[0] == "--keys")
+                        .map(|pair| pair[1].as_str());
+                    let keys = nscb::keys::KeyStore::from_default_locations(keys_path)
+                        .map_err(|error| error.to_string())?;
+
+                    let _ = app.emit(
+                        "nscb-stdout",
+                        StdoutEvent {
+                            op: operation.clone(),
+                            line: "[ANDROID] Reading the selected document directly (zero-copy)"
+                                .to_string(),
+                        },
+                    );
+                    if args.iter().any(|arg| arg == "--ADVfilelist") {
+                        nscb::ops::info::file_list_text_reader(
+                            &mut source,
+                            &display_name,
+                            &keys,
+                        )
+                        .map_err(|error| error.to_string())
+                    } else {
+                        nscb::ops::info::content_list_text_reader(
+                            &mut source,
+                            &display_name,
+                            &keys,
+                        )
+                        .map_err(|error| error.to_string())
+                    }
+                })();
+
+                let code = match direct_result {
+                    Ok(report) => {
+                        for line in report.lines().filter(|line| !line.trim().is_empty()) {
+                            let _ = app.emit(
+                                "nscb-stdout",
+                                StdoutEvent {
+                                    op: operation.clone(),
+                                    line: line.to_string(),
+                                },
+                            );
+                        }
+                        let _ = app.emit(
+                            "nscb-stdout",
+                            StdoutEvent {
+                                op: operation.clone(),
+                                line: "[DONE] Android zero-copy info completed".to_string(),
+                            },
+                        );
+                        0
+                    }
+                    Err(message) => {
+                        let _ = app.emit(
+                            "nscb-stderr",
+                            StderrEvent {
+                                op: operation.clone(),
+                                chunk: message,
+                            },
+                        );
+                        1
+                    }
+                };
+                if let Ok(mut lock) = running_pid().lock() {
+                    *lock = None;
+                }
+                let _ = app.emit("nscb-done", DoneEvent { op: operation, code });
+                return;
+            }
+        }
+
         let resolve_android_arg = |arg: String| -> Result<String, String> {
                 if !arg.starts_with("content://") {
                     return Ok(arg);
